@@ -1,69 +1,52 @@
-# Hunter Pro CRM Ultimate Enterprise - Dockerfile
-# Version: 7.0.0
-# Multi-stage build for optimized image size
+# Stage 1: Build the Application
+# We use python:3.12-slim as the base for building and installing dependencies.
+FROM python:3.12-slim AS build
 
-# ========== Stage 1: Builder ==========
-FROM python:3.11-slim as builder
+# Set the working directory inside the container
+WORKDIR /usr/src/app
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+# Install system dependencies needed for building Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends     build-essential     gcc     && rm -rf /var/lib/apt/lists/*
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create virtual environment
+# Create a virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements.txt
+# Copy requirements.txt if it exists (using wildcard to avoid build failure)
+COPY requirements.tx[t] ./requirements.txt
 
-# ========== Stage 2: Runtime ==========
-FROM python:3.11-slim
+# Install Python dependencies only if requirements.txt exists
+RUN pip install --upgrade pip &&     if [ -f requirements.txt ]; then         pip install -r requirements.txt;     fi
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+# Copy the rest of the application source code
+COPY . .
 
-# Install runtime dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Stage 2: Create the Final Production Image
+# We use python:3.12-slim as a minimal runtime image.
+FROM python:3.12-slim
 
-# Create app user for security
-RUN useradd -m -u 1000 appuser && \
-    mkdir -p /app /app/uploads /app/logs && \
-    chown -R appuser:appuser /app
+# Set the working directory
+WORKDIR /usr/src/app
 
-# Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
+# Install only runtime dependencies if needed
+RUN apt-get update && apt-get install -y --no-install-recommends     libpq5     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
-WORKDIR /app
+# Copy the virtual environment from the build stage
+COPY --from=build /opt/venv /opt/venv
 
-# Copy application code
-COPY --chown=appuser:appuser . .
+# Copy the application code
+COPY --from=build /usr/src/app .
 
-# Switch to non-root user
+# Set the virtual environment as the active Python environment
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create a non-root user to run the application
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /usr/src/app
 USER appuser
 
-# Expose port
-EXPOSE 5000
+# Expose the port your app runs on
+ENV PORT=8080
+EXPOSE $PORT
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
-
-# Run application
-CMD ["python", "main.py"]
+# Define the command to start your application
+CMD ["python", "app.py"]
